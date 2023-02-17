@@ -1,5 +1,13 @@
 
-use std::{io::{BufReader, BufRead}, fs::File, collections::{VecDeque, HashSet}};
+use std::{io::{BufReader, BufRead}, fs::File, collections::{VecDeque, HashMap, HashSet}};
+
+const BACKSPACE: char = 8u8 as char;
+
+const TOTAL_ROCKS_LONG: usize = 1000000000000;
+
+const TOTAL_ROCKS_SHORT: usize = 2022;
+
+const TOTAL_ROCKS: usize = TOTAL_ROCKS_LONG;
 
 enum Direction {
     LEFT,
@@ -16,6 +24,11 @@ struct Rock {
     shape: RockType
 }
 
+struct ArenaAnalytics {
+    row_meta: Vec<(usize, RockType, usize)>
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum RockType{
     MINUS,
     PLUS,
@@ -100,6 +113,86 @@ impl Arena {
 
         println!("+-------+\n");
     }
+}
+
+impl ArenaAnalytics {
+
+    fn analyze_row(&mut self, arena: &VecDeque<Vec<bool>>, new_rock_index: usize, rock_type: RockType, jet_input: usize) -> (bool, usize) {
+
+        let search_result: Vec<(usize, usize)> = self.row_meta.iter().enumerate().filter_map(
+            |(i, v)| if v.1 == rock_type && v.2 == jet_input {Some((i, v.0))} else {None}).collect::<Vec<(usize, usize)>>();
+
+        let new_arena_index: usize = arena.len() - 3;
+
+        self.row_meta.insert(new_rock_index, (new_arena_index, rock_type, jet_input));
+
+        for (rock_index, arena_index)  in search_result.iter().rev() {
+            if arena_index < &(new_arena_index / 2) {
+                break;
+            } else if !search_result.iter().any(|(_, ta)| ta == &(2 * arena_index - new_arena_index)) {
+                continue;
+            }
+
+            let mut res = true;
+
+            for (lower_rock_index, higher_rock_index) in (2* (*rock_index)- (new_rock_index)..*rock_index).zip(*rock_index..new_rock_index) {
+                if self.row_meta[lower_rock_index].1 != self.row_meta[higher_rock_index].1 
+                || self.row_meta[lower_rock_index].2 != self.row_meta[higher_rock_index].2 {
+                    res = false;
+                    break;
+                }
+
+            }
+
+            if res {
+                println!("found something interesting!!! [{}, {}, {}] lengths [{}, {}]",
+                2* (*rock_index)- (new_rock_index), *rock_index, new_rock_index,
+                *rock_index - (2* (*rock_index)- (new_rock_index)), new_rock_index - *rock_index);
+                println!("arena heights [{}, {}, {}] lengths [{}, {}]",
+                self.row_meta[2* (*rock_index)- (new_rock_index)].0, *arena_index, new_arena_index,
+                *arena_index - (self.row_meta[2* (*rock_index)- (new_rock_index)].0), new_arena_index - *arena_index);
+
+
+                 let pattern_len_arena = (new_arena_index - arena_index);
+                 let pattern_len_rock_index = new_rock_index - *rock_index;
+                 let first_index_arena = new_arena_index - 2 * pattern_len_arena;
+                 let first_index_rock = new_rock_index - 2 * pattern_len_rock_index;
+                 let number_of_patterns = (TOTAL_ROCKS - first_index_rock) / pattern_len_rock_index;
+                 let last_pattern_index_rock = first_index_rock + number_of_patterns * pattern_len_rock_index;
+                 let remainder = TOTAL_ROCKS - last_pattern_index_rock;
+                 let last_height_pattern = first_index_arena + number_of_patterns * pattern_len_arena;
+
+                 let height_remainder = self.row_meta[first_index_rock + remainder - 1].0 - first_index_arena;
+
+                 let total_height = height_remainder + last_height_pattern;
+
+                 return (false, 0);
+                 //return (true, last_height_pattern + height_remainder);
+            }
+
+        }
+
+        (false, 0)
+    }
+
+
+}
+
+fn detect_pattern(arena: &VecDeque<Vec<bool>>, pivot_point: usize) -> bool {
+
+    let end_second_range = arena.len() - 3;
+    let begin_first_range = 2 * pivot_point - end_second_range;
+
+    for (row_i, row_j) in (begin_first_range..pivot_point).zip(pivot_point..end_second_range) {
+        
+        for (a, b) in arena[row_i].iter().zip(arena[row_j].iter()){
+            if *a != *b {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 impl Rock {
@@ -345,30 +438,28 @@ fn simulate(jet_inputs: &mut Vec<Direction>) -> usize{
             vec![false, false, false, false, false, false, false]
             ])};
     
+    let mut arena_analyzer = ArenaAnalytics{row_meta: Vec::with_capacity(50000)};
 
-    let mut curbed_arena = 0;
     let mut input_index = 0;
 
-    for rock_index in 0..2022 as usize {
-        drop_rock(&mut arena, Rock::from_u32(rock_index.rem_euclid(5)), jet_inputs, &mut input_index);
-        //curbed_arena += curb(&mut arena);
-        //arena.print();
-    }
+    for rock_index in 0..TOTAL_ROCKS as usize {
+        //print!("{}\ri: {} / TOTAL_ROCKS", BACKSPACE, rock_index);
 
-    let mut cropped = 0;
-    for row in arena.field.iter() {
-        if row.contains(&true) {
-            break;
+        let mut rock = Rock::from_u32(rock_index.rem_euclid(5));
+        let original_jet_input = input_index;
+
+        drop_rock(&mut arena, &mut rock, jet_inputs, &mut input_index);
+
+        let (pattern_detected, end_height) = arena_analyzer.analyze_row(&arena.field, rock_index,  rock.shape, original_jet_input);
+        if pattern_detected {
+            return end_height;
         }
-        cropped += 1;
     }
 
-    arena.print();
-
-    curbed_arena + arena.field.len() - cropped
+    return TOTAL_ROCKS;
 }
 
-fn drop_rock(arena: &mut Arena, mut rock: Rock, jet_inputs: &Vec<Direction>, input_index: &mut usize) {
+fn drop_rock(arena: &mut Arena, rock: &mut Rock, jet_inputs: &Vec<Direction>, input_index: &mut usize) {
 
     while !arena.find_overlaps(&rock) {
         let input = &jet_inputs[*input_index];
@@ -398,71 +489,6 @@ fn drop_rock(arena: &mut Arena, mut rock: Rock, jet_inputs: &Vec<Direction>, inp
     }
 
     arena.add_rock(&rock);
-}
-
-fn curb(arena: &mut Arena) -> usize {
-
-    let mut result = false;
-    let mut max_head = 0;
-
-    for (i, _) in arena.field.iter().enumerate() {
-
-        if !arena.field[i][0] {
-            continue;
-        } else {
-            let mut heads: HashSet<usize> = HashSet::from([i]);
-
-            for j in 1..6 {
-
-                let mut new_heads: HashSet<usize> = HashSet::new();
-                max_head = 0;
-                
-                for head in heads {
-                    if head > 0 && arena.field[head - 1][j] {
-                        new_heads.insert(head-1);
-                        max_head = std::cmp::max(max_head, head -1);
-                    }
-                    
-                    if arena.field[head][j] {
-                        new_heads.insert(head);
-                        max_head = std::cmp::max(max_head, head);
-                    }
-
-                    if head < arena.field.len() - 1 && arena.field[head + 1][j] {
-                        new_heads.insert(head + 1);
-                        max_head = std::cmp::max(max_head, head + 1);
-                    }
-                }
-
-                if new_heads.is_empty() {
-                    heads = new_heads;
-                    break;
-                }
-                heads = new_heads;
-            }
-
-            if heads.is_empty() {
-                continue;
-            } else {
-                result = true;
-                break;
-            }
-        }
-    }
-
-    if result {
-
-        let mut res = 0;
-
-        for row in max_head + 1..arena.field.len() {
-            arena.field.remove(row);
-            res += 1;
-        }
-
-        return res;
-    } else {
-        return 0;
-    }
 }
 
 fn main() {
